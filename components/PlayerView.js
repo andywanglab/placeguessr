@@ -1,13 +1,18 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useGame } from "../lib/gameState";
 import GuessMap from "./GuessMap";
 
 export default function PlayerView({ playerIndex }) {
-  const { state, placeGuess, lockIn } = useGame();
+  const { state, placeGuess, lockIn, replaceLocation } = useGame();
   const svRef = useRef(null);
   const svInstanceRef = useRef(null);
   const prevRoundRef = useRef(-1);
+  const svServiceRef = useRef(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const retryCountRef = useRef(0);
+  const MAX_RETRIES = 10;
 
   const location = state.locations[state.currentRound];
   const guess = state.guesses[state.currentRound]?.[playerIndex];
@@ -15,34 +20,102 @@ export default function PlayerView({ playerIndex }) {
   const name = state.playerNames[playerIndex];
   const color = playerIndex === 0 ? "blue" : "red";
 
+  // Check if Street View is available at the location
+  const checkStreetViewAvailable = async (lat, lng) => {
+    if (!window.google?.maps?.StreetViewService) {
+      return false;
+    }
+
+    if (!svServiceRef.current) {
+      svServiceRef.current = new google.maps.StreetViewService();
+    }
+
+    return new Promise((resolve) => {
+      svServiceRef.current.getPanorama(
+        { location: { lat, lng }, radius: 1000 },
+        (data, status) => {
+          resolve(status === "OK");
+        }
+      );
+    });
+  };
+
   useEffect(() => {
     if (!svRef.current || !window.google || !location) return;
 
-    // Only create/reset when round changes
+    // Only process when round changes
     if (prevRoundRef.current !== state.currentRound) {
       prevRoundRef.current = state.currentRound;
+      setIsLoading(true);
+      setError(null);
+      retryCountRef.current = 0;
 
-      if (svInstanceRef.current) {
-        svInstanceRef.current.setPosition({
-          lat: location.lat,
-          lng: location.lng,
-        });
-        svInstanceRef.current.setPov({ heading: Math.random() * 360, pitch: 0 });
-      } else {
-        svInstanceRef.current = new google.maps.StreetViewPanorama(svRef.current, {
-          position: { lat: location.lat, lng: location.lng },
-          pov: { heading: Math.random() * 360, pitch: 0 },
-          zoom: 0,
-          addressControl: false,
-          showRoadLabels: false,
-          enableCloseButton: false,
-          fullscreenControl: false,
-          motionTracking: false,
-          motionTrackingControl: false,
-        });
-      }
+      const loadStreetView = async () => {
+        const available = await checkStreetViewAvailable(location.lat, location.lng);
+
+        if (!available) {
+          // Try to get a new location if Street View is not available
+          if (retryCountRef.current < MAX_RETRIES) {
+            retryCountRef.current++;
+            console.log(`No Street View at ${location.name}, trying new location (attempt ${retryCountRef.current})`);
+            replaceLocation(state.currentRound);
+            return;
+          } else {
+            setError("Unable to find a location with Street View coverage");
+            setIsLoading(false);
+            return;
+          }
+        }
+
+        // Street View is available, create or update panorama
+        if (svInstanceRef.current) {
+          svInstanceRef.current.setPosition({
+            lat: location.lat,
+            lng: location.lng,
+          });
+          svInstanceRef.current.setPov({ heading: Math.random() * 360, pitch: 0 });
+        } else {
+          svInstanceRef.current = new google.maps.StreetViewPanorama(svRef.current, {
+            position: { lat: location.lat, lng: location.lng },
+            pov: { heading: Math.random() * 360, pitch: 0 },
+            zoom: 0,
+            addressControl: false,
+            showRoadLabels: false,
+            enableCloseButton: false,
+            fullscreenControl: false,
+            motionTracking: false,
+            motionTrackingControl: false,
+          });
+        }
+
+        // Listen for panorama ready event
+        const handleReady = () => {
+          setIsLoading(false);
+        };
+
+        const handleError = () => {
+          if (retryCountRef.current < MAX_RETRIES) {
+            retryCountRef.current++;
+            replaceLocation(state.currentRound);
+          } else {
+            setError("Failed to load Street View");
+            setIsLoading(false);
+          }
+        };
+
+        google.maps.event.addListenerOnce(svInstanceRef.current, 'pano_changed', handleReady);
+        google.maps.event.addListenerOnce(svInstanceRef.current, 'error', handleError);
+
+        // Fallback timeout in case events don't fire
+        setTimeout(() => {
+          setIsLoading(false);
+        }, 5000);
+      };
+
+      loadStreetView();
     }
-  }, [location, state.currentRound]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location, state.currentRound, replaceLocation]);
 
   const handleGuess = (lat, lng) => {
     placeGuess(playerIndex, lat, lng);
@@ -69,7 +142,24 @@ export default function PlayerView({ playerIndex }) {
       </div>
 
       {/* Street View */}
-      <div className="flex-1 min-h-0" ref={svRef} />
+      <div className="flex-1 min-h-0 relative">
+        <div ref={svRef} className="w-full h-full" />
+        {isLoading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
+            <div className="flex flex-col items-center gap-2">
+              <div className="w-8 h-8 border-4 border-white/30 border-t-white rounded-full animate-spin" />
+              <span className="text-white/80 text-sm">Loading Street View...</span>
+            </div>
+          </div>
+        )}
+        {error && (
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
+            <div className="text-center p-4">
+              <span className="text-red-400 text-sm">{error}</span>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Guess Map */}
       <div className="h-[35%] relative">
@@ -89,14 +179,14 @@ export default function PlayerView({ playerIndex }) {
           ) : (
             <button
               onClick={handleLock}
-              disabled={!guess}
+              disabled={!guess || isLoading}
               className={`px-6 py-2 rounded-lg font-bold text-sm text-white transition-all ${
-                guess
+                guess && !isLoading
                   ? `${bgColor} hover:opacity-90 shadow-lg`
                   : "bg-gray-600 cursor-not-allowed opacity-50"
               }`}
             >
-              {guess ? "Lock In" : "Click map to guess"}
+              {isLoading ? "Loading..." : guess ? "Lock In" : "Click map to guess"}
             </button>
           )}
         </div>
