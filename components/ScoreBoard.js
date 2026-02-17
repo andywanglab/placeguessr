@@ -1,6 +1,7 @@
 "use client";
 import { useGame } from "../lib/gameState";
 import { formatDistance } from "../lib/scoring";
+import ResultMap from "./ResultMap";
 
 export default function ScoreBoard() {
   const { state, nextRound } = useGame();
@@ -10,15 +11,24 @@ export default function ScoreBoard() {
 
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-      <div className="bg-gray-800 rounded-2xl p-8 max-w-lg w-full mx-4 shadow-2xl">
+      <div className="bg-gray-800 rounded-2xl p-8 max-w-2xl w-full mx-4 shadow-2xl">
         <h2 className="text-2xl font-bold text-white text-center mb-1">
           Round {round + 1} Results
         </h2>
-        <p className="text-gray-400 text-center mb-6 text-sm">
+        <p className="text-gray-400 text-center mb-4 text-sm">
           {location.name}
         </p>
 
-        <div className="space-y-4 mb-6">
+        {/* Results map */}
+        <div className="h-64 mb-4 rounded-lg overflow-hidden border border-gray-600">
+          <ResultMap
+            actual={location}
+            guesses={state.guesses[round]}
+            playerNames={state.playerNames}
+          />
+        </div>
+
+        <div className="space-y-3 mb-4">
           {[0, 1].map((i) => {
             const dist = state.distances[round][i];
             const score = state.scores[round][i];

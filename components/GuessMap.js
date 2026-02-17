@@ -16,22 +16,13 @@ export default function GuessMap({ onGuess, guess, locked, playerIndex }) {
       mapTypeControl: false,
       fullscreenControl: false,
       gestureHandling: "greedy",
-      styles: [
-        {
-          featureType: "administrative.country",
-          elementType: "labels",
-          stylers: [{ visibility: "on" }],
-        },
-      ],
     });
 
     mapInstanceRef.current = map;
 
     map.addListener("click", (e) => {
       if (locked) return;
-      const lat = e.latLng.lat();
-      const lng = e.latLng.lng();
-      onGuess(lat, lng);
+      onGuess(e.latLng.lat(), e.latLng.lng());
     });
   }, [locked, onGuess]);
 
@@ -39,7 +30,6 @@ export default function GuessMap({ onGuess, guess, locked, playerIndex }) {
     initMap();
   }, [initMap]);
 
-  // Update marker when guess changes
   useEffect(() => {
     if (!mapInstanceRef.current || !window.google) return;
 
@@ -68,7 +58,6 @@ export default function GuessMap({ onGuess, guess, locked, playerIndex }) {
     }
   }, [guess, playerIndex]);
 
-  // Handle locked state changes - update click listener
   useEffect(() => {
     if (!mapInstanceRef.current) return;
     const map = mapInstanceRef.current;
