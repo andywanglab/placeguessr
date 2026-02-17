@@ -10,112 +10,67 @@ export default function PlayerView({ playerIndex }) {
   const prevRoundRef = useRef(-1);
   const svServiceRef = useRef(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
   const retryCountRef = useRef(0);
-  const MAX_RETRIES = 10;
+  const MAX_RETRIES = 5;
 
   const location = state.locations[state.currentRound];
   const guess = state.guesses[state.currentRound]?.[playerIndex];
   const isLocked = state.locked[playerIndex];
   const name = state.playerNames[playerIndex];
-  const color = playerIndex === 0 ? "blue" : "red";
 
-  // Check if Street View is available at the location
-  const checkStreetViewAvailable = async (lat, lng) => {
-    if (!window.google?.maps?.StreetViewService) {
-      return false;
-    }
+  useEffect(() => {
+    if (!svRef.current || !window.google || !location) return;
+    if (prevRoundRef.current === state.currentRound) return;
+
+    prevRoundRef.current = state.currentRound;
+    setIsLoading(true);
+    retryCountRef.current = 0;
 
     if (!svServiceRef.current) {
       svServiceRef.current = new google.maps.StreetViewService();
     }
 
-    return new Promise((resolve) => {
+    // Only player 0 checks & replaces to avoid race condition
+    const shouldCheck = playerIndex === 0;
+
+    const loadPanorama = (lat, lng) => {
       svServiceRef.current.getPanorama(
-        { location: { lat, lng }, radius: 1000 },
+        { location: { lat, lng }, radius: 5000 },
         (data, status) => {
-          resolve(status === "OK");
+          if (status !== "OK") {
+            if (shouldCheck && retryCountRef.current < MAX_RETRIES) {
+              retryCountRef.current++;
+              replaceLocation(state.currentRound);
+            }
+            return;
+          }
+
+          const panoPos = data.location.latLng;
+
+          if (svInstanceRef.current) {
+            svInstanceRef.current.setPosition(panoPos);
+            svInstanceRef.current.setPov({ heading: Math.random() * 360, pitch: 0 });
+          } else {
+            svInstanceRef.current = new google.maps.StreetViewPanorama(svRef.current, {
+              position: panoPos,
+              pov: { heading: Math.random() * 360, pitch: 0 },
+              zoom: 0,
+              addressControl: false,
+              showRoadLabels: false,
+              enableCloseButton: false,
+              fullscreenControl: false,
+              motionTracking: false,
+              motionTrackingControl: false,
+            });
+          }
+
+          setIsLoading(false);
         }
       );
-    });
-  };
+    };
 
-  useEffect(() => {
-    if (!svRef.current || !window.google || !location) return;
-
-    // Only process when round changes
-    if (prevRoundRef.current !== state.currentRound) {
-      prevRoundRef.current = state.currentRound;
-      setIsLoading(true);
-      setError(null);
-      retryCountRef.current = 0;
-
-      const loadStreetView = async () => {
-        const available = await checkStreetViewAvailable(location.lat, location.lng);
-
-        if (!available) {
-          // Try to get a new location if Street View is not available
-          if (retryCountRef.current < MAX_RETRIES) {
-            retryCountRef.current++;
-            console.log(`No Street View at ${location.name}, trying new location (attempt ${retryCountRef.current})`);
-            replaceLocation(state.currentRound);
-            return;
-          } else {
-            setError("Unable to find a location with Street View coverage");
-            setIsLoading(false);
-            return;
-          }
-        }
-
-        // Street View is available, create or update panorama
-        if (svInstanceRef.current) {
-          svInstanceRef.current.setPosition({
-            lat: location.lat,
-            lng: location.lng,
-          });
-          svInstanceRef.current.setPov({ heading: Math.random() * 360, pitch: 0 });
-        } else {
-          svInstanceRef.current = new google.maps.StreetViewPanorama(svRef.current, {
-            position: { lat: location.lat, lng: location.lng },
-            pov: { heading: Math.random() * 360, pitch: 0 },
-            zoom: 0,
-            addressControl: false,
-            showRoadLabels: false,
-            enableCloseButton: false,
-            fullscreenControl: false,
-            motionTracking: false,
-            motionTrackingControl: false,
-          });
-        }
-
-        // Listen for panorama ready event
-        const handleReady = () => {
-          setIsLoading(false);
-        };
-
-        const handleError = () => {
-          if (retryCountRef.current < MAX_RETRIES) {
-            retryCountRef.current++;
-            replaceLocation(state.currentRound);
-          } else {
-            setError("Failed to load Street View");
-            setIsLoading(false);
-          }
-        };
-
-        google.maps.event.addListenerOnce(svInstanceRef.current, 'pano_changed', handleReady);
-        google.maps.event.addListenerOnce(svInstanceRef.current, 'error', handleError);
-
-        // Fallback timeout in case events don't fire
-        setTimeout(() => {
-          setIsLoading(false);
-        }, 5000);
-      };
-
-      loadStreetView();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location, state.currentRound, replaceLocation]);
+    loadPanorama(location.lat, location.lng);
+  }, [location, state.currentRound, playerIndex, replaceLocation]);
 
   const handleGuess = (lat, lng) => {
     placeGuess(playerIndex, lat, lng);
@@ -129,7 +84,6 @@ export default function PlayerView({ playerIndex }) {
 
   const borderColor = playerIndex === 0 ? "border-blue-500" : "border-red-500";
   const bgColor = playerIndex === 0 ? "bg-blue-600" : "bg-red-600";
-  const textColor = playerIndex === 0 ? "text-blue-400" : "text-red-400";
 
   return (
     <div className={`flex flex-col h-full border-2 ${borderColor} rounded-lg overflow-hidden bg-gray-900`}>
@@ -149,13 +103,6 @@ export default function PlayerView({ playerIndex }) {
             <div className="flex flex-col items-center gap-2">
               <div className="w-8 h-8 border-4 border-white/30 border-t-white rounded-full animate-spin" />
               <span className="text-white/80 text-sm">Loading Street View...</span>
-            </div>
-          </div>
-        )}
-        {error && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
-            <div className="text-center p-4">
-              <span className="text-red-400 text-sm">{error}</span>
             </div>
           </div>
         )}
