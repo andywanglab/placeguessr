@@ -7,10 +7,11 @@ export default function PlayerView({ playerIndex }) {
   const { state, placeGuess, lockIn, replaceLocation } = useGame();
   const svRef = useRef(null);
   const svInstanceRef = useRef(null);
-  const prevRoundRef = useRef(-1);
+  const prevLocationRef = useRef(null);
   const svServiceRef = useRef(null);
   const [isLoading, setIsLoading] = useState(true);
   const retryCountRef = useRef(0);
+  const prevRoundRef = useRef(-1);
   const MAX_RETRIES = 5;
 
   const location = state.locations[state.currentRound];
@@ -18,59 +19,67 @@ export default function PlayerView({ playerIndex }) {
   const isLocked = state.locked[playerIndex];
   const name = state.playerNames[playerIndex];
 
+  // Track location key to detect changes (both round changes and replacements)
+  const locationKey = location ? `${location.lat},${location.lng}` : null;
+
   useEffect(() => {
     if (!svRef.current || !window.google || !location) return;
-    if (prevRoundRef.current === state.currentRound) return;
 
-    prevRoundRef.current = state.currentRound;
+    // Skip if same location already loaded
+    if (prevLocationRef.current === locationKey) return;
+    prevLocationRef.current = locationKey;
+
+    // Reset retry count only on new round
+    if (prevRoundRef.current !== state.currentRound) {
+      prevRoundRef.current = state.currentRound;
+      retryCountRef.current = 0;
+    }
+
     setIsLoading(true);
-    retryCountRef.current = 0;
 
     if (!svServiceRef.current) {
       svServiceRef.current = new google.maps.StreetViewService();
     }
 
-    // Only player 0 checks & replaces to avoid race condition
-    const shouldCheck = playerIndex === 0;
+    // Only player 0 triggers replacement to avoid race condition
+    const shouldReplace = playerIndex === 0;
 
-    const loadPanorama = (lat, lng) => {
-      svServiceRef.current.getPanorama(
-        { location: { lat, lng }, radius: 5000 },
-        (data, status) => {
-          if (status !== "OK") {
-            if (shouldCheck && retryCountRef.current < MAX_RETRIES) {
-              retryCountRef.current++;
-              replaceLocation(state.currentRound);
-            }
-            return;
-          }
-
-          const panoPos = data.location.latLng;
-
-          if (svInstanceRef.current) {
-            svInstanceRef.current.setPosition(panoPos);
-            svInstanceRef.current.setPov({ heading: Math.random() * 360, pitch: 0 });
+    svServiceRef.current.getPanorama(
+      { location: { lat: location.lat, lng: location.lng }, radius: 5000, source: "outdoor" },
+      (data, status) => {
+        if (status !== "OK") {
+          if (shouldReplace && retryCountRef.current < MAX_RETRIES) {
+            retryCountRef.current++;
+            replaceLocation(state.currentRound);
           } else {
-            svInstanceRef.current = new google.maps.StreetViewPanorama(svRef.current, {
-              position: panoPos,
-              pov: { heading: Math.random() * 360, pitch: 0 },
-              zoom: 0,
-              addressControl: false,
-              showRoadLabels: false,
-              enableCloseButton: false,
-              fullscreenControl: false,
-              motionTracking: false,
-              motionTrackingControl: false,
-            });
+            setIsLoading(false);
           }
-
-          setIsLoading(false);
+          return;
         }
-      );
-    };
 
-    loadPanorama(location.lat, location.lng);
-  }, [location, state.currentRound, playerIndex, replaceLocation]);
+        const panoPos = data.location.latLng;
+
+        if (svInstanceRef.current) {
+          svInstanceRef.current.setPosition(panoPos);
+          svInstanceRef.current.setPov({ heading: Math.random() * 360, pitch: 0 });
+        } else {
+          svInstanceRef.current = new google.maps.StreetViewPanorama(svRef.current, {
+            position: panoPos,
+            pov: { heading: Math.random() * 360, pitch: 0 },
+            zoom: 0,
+            addressControl: false,
+            showRoadLabels: false,
+            enableCloseButton: false,
+            fullscreenControl: false,
+            motionTracking: false,
+            motionTrackingControl: false,
+          });
+        }
+
+        setIsLoading(false);
+      }
+    );
+  }, [locationKey, location, state.currentRound, playerIndex, replaceLocation]);
 
   const handleGuess = (lat, lng) => {
     placeGuess(playerIndex, lat, lng);
